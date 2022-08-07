@@ -1,8 +1,14 @@
 import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
 import time
 from base64 import b64decode
 from typing import Optional
 
+import requests
 import stravalib.exc
 from selenium.webdriver import Firefox
 from selenium.webdriver.remote.webdriver import WebDriver
@@ -11,6 +17,18 @@ from selenium.webdriver.firefox.options import Options
 
 import stravaweblib
 from stravaweblib.webclient import BASE_URL
+
+
+def platform_str() -> str:
+    import platform
+    mapping = {
+        'Windows': 'win',
+        'Linux': 'linux',
+        'Darwin': 'macos'
+    }
+    if platform.system() not in mapping:
+        raise OSError("Unknown System Platform")
+    return mapping[platform.system()]
 
 
 class InteractiveWebClient(stravaweblib.WebClient):
@@ -40,7 +58,7 @@ class InteractiveWebClient(stravaweblib.WebClient):
     @property
     def __driver_initialized(self) -> bool:
         """Check if the driver was initialized already"""
-        return self.__driver is None
+        return self.__driver is not None
 
     def __init_driver(self):
         """Initialize the driver with a Firefox instance. Requires geckodriver"""
@@ -109,9 +127,54 @@ class InteractiveWebClient(stravaweblib.WebClient):
                 checkbox.click()
         self.__driver.find_element(By.CLASS_NAME, 'media-right').click()
 
+    @staticmethod
+    def setup_geckodriver(exec_path: pathlib.Path = None):
+        if exec_path is None:
+            exec_path = pathlib.Path(__file__).parent.parent.absolute() / 'deps'
+
+        exec_path.mkdir(exist_ok = True)
+        is_unix_like = 'win' not in sys.platform
+        if (is_unix_like and (exec_path / 'geckodriver').is_file()) \
+                or (not is_unix_like and (exec_path / 'geckodriver.exe').is_file()):
+            # add deps location to path
+            if str(exec_path) not in os.environ["PATH"]:
+                os.environ["PATH"] += os.pathsep + str(exec_path)
+            return
+
+        # get the newest release of the geckodriver through the GitHub api.
+        r = requests.get('https://api.github.com/repos/mozilla/geckodriver/releases/latest')
+        data = r.json()
+
+        # download all assets of the latest release
+        if r.status_code == requests.codes.ok:
+            platform = platform_str()
+            bits = '64' if sys.maxsize > 2**32 else '32'
+            matching_assets = [asset for asset in data['assets'] if
+                               platform in asset["name"] and bits in asset["name"] and (
+                                           asset["name"].endswith('gz') or asset["name"].endswith('zip'))]
+            if not matching_assets:
+                raise OSError("No matching asset found for system")
+            asset = matching_assets[0]
+            asset_path = exec_path / asset['name']
+            with asset_path.open('wb') as f:
+                f.write(requests.get(asset['browser_download_url']).content)
+            shutil.unpack_archive(asset_path, exec_path)
+            asset_path.unlink()
+
+            if is_unix_like:
+                # if on unix: make the binary file executable
+                subprocess.run(f'chmod +x {(exec_path / "geckodriver")}', shell = True)
+        else:
+            raise ConnectionRefusedError("Could not retrieve latest release from geckodriver github page. Install "
+                                         "manually instead. See https://github.com/mozilla/geckodriver")
+
+        # add deps location to path
+        if str(exec_path) not in os.environ["PATH"]:
+            os.environ["PATH"] += os.pathsep + str(exec_path)
+
 
 InteractiveWebClient.__init__.__doc__ = stravaweblib.WebClient.__init__.__doc__ + \
-         """
+                                        """
         :param setup: Directly perform setup of the driver 
         :type setup: bool
         """
