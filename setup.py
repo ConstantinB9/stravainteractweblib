@@ -14,7 +14,7 @@ except Exception:
 
 setup(
     name="stravainteractweblib",
-    version="0.0.2",
+    version="0.0.3",
     description=" Extends the Strava v3 API using web scraping and web browser interactions",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -38,6 +38,6 @@ setup(
     python_requires=">=3.4.0",
     install_requires=[
         "stravaweblib>=0.0.6",
-        "selenium>=4.3.0",
+        "mechanize>=0.4.8",
     ],
 )

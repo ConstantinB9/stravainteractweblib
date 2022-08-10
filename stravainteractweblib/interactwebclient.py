@@ -1,32 +1,10 @@
 import json
-import os
-import pathlib
-import shutil
-import subprocess
-import sys
 import time
 from base64 import b64decode
-from typing import Optional
-
-import requests
-from selenium.common.exceptions import NoSuchElementException
-import stravalib.exc
-from selenium.webdriver import Firefox
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options
 
 import stravaweblib
+from mechanize import Browser
 from stravaweblib.webclient import BASE_URL
-
-
-def platform_str() -> str:
-    import platform
-
-    mapping = {"Windows": "win", "Linux": "linux", "Darwin": "macos"}
-    if platform.system() not in mapping:
-        raise OSError("Unknown System Platform")
-    return mapping[platform.system()]
 
 
 class InteractiveWebClient(stravaweblib.WebClient):
@@ -36,50 +14,22 @@ class InteractiveWebClient(stravaweblib.WebClient):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.__driver: Optional[WebDriver] = None
-        self.__auth_cookie_set = False
-        if kwargs.pop("setup", False):
-            self.__ensure_setup()
-
-    def __ensure_setup(self):
-        """Perform setup steps, if setup wasn't performed yet"""
-        if not self.__driver_initialized:
-            self.__init_driver()
-        if not self.__auth_cookie_set:
-            self.__login()
-
-    @property
-    def __driver_initialized(self) -> bool:
-        """Check if the driver was initialized already"""
-        return self.__driver is not None
-
-    def __init_driver(self):
-        """Initialize the driver with a Firefox instance. Requires geckodriver"""
-        opts = Options()
-        opts.headless = True
-        self.__driver = Firefox(options=opts)
-        return
+        self.__browser: Browser = Browser()
+        self.__login()
 
     def __login(self):
         """Set the login cookies, gathered from stravaweblib Client"""
-        self.__driver.get(BASE_URL)
-        self.__driver.add_cookie(
-            {
-                "name": "strava_remember_id",
-                "domain": ".strava.com",
-                "value": self._get_account_id(self.jwt),
-                "secure": True,
-            }
+        self.__browser.open(BASE_URL)
+        self.__browser.set_simple_cookie(
+            name="strava_remember_id",
+            domain=".strava.com",
+            value=self._get_account_id(self.jwt),
         )
-        self.__driver.add_cookie(
-            {
-                "name": "strava_remember_token",
-                "domain": ".strava.com",
-                "value": self.jwt,
-                "secure": True,
-            }
+        self.__browser.set_simple_cookie(
+            name="strava_remember_token",
+            domain=".strava.com",
+            value=self.jwt,
         )
-        self.__auth_cookie_set = True
 
     @staticmethod
     def _get_account_id(jwt) -> str:
@@ -104,7 +54,7 @@ class InteractiveWebClient(stravaweblib.WebClient):
         except KeyError:
             raise ValueError("Failed to extract required data from the JWT")
 
-    def change_stats_visibility(
+    def set_stats_visibility(
         self, activity_id, calories=True, heart_rate=True, speed=True, power=True
     ) -> None:
         """
@@ -116,82 +66,23 @@ class InteractiveWebClient(stravaweblib.WebClient):
         :param power: weather 'power' stat should be public
         :return: None
         """
-        self.__ensure_setup()
-
         url = f"{BASE_URL}/activities/{activity_id}/edit"
-        self.__driver.get(url)
-        if self.__driver.current_url != url:
-            raise stravalib.exc.AuthError("Authorization Failed")
-
-        metrics = [
-            ("activity_stats_visibility_calories", calories),
-            ("activity_stats_visibility_heart_rate", heart_rate),
-            ("activity_stats_visibility_speed", speed),
-            ("activity_stats_visibility_power", power),
+        self.__browser.open(url)
+        form = [f for f in self.__browser.forms() if f.attrs["id"] == "edit-activity"][
+            0
         ]
-        for metric_field_id, des_visibility in metrics:
-            try:
-                checkbox = self.__driver.find_element(By.ID, value=metric_field_id)
-                if checkbox.get_property("checked") == des_visibility:
-                    checkbox.click()
-            except NoSuchElementException as e:
-                print(e.msg)
-
-        self.__driver.find_element(By.CLASS_NAME, "media-right").click()
-
-    @staticmethod
-    def setup_geckodriver(exec_path: pathlib.Path = None):
-        if exec_path is None:
-            exec_path = pathlib.Path(__file__).parent.parent.absolute() / "deps"
-
-        exec_path.mkdir(exist_ok=True)
-        is_unix_like = "win" not in sys.platform
-        if (is_unix_like and (exec_path / "geckodriver").is_file()) or (
-            not is_unix_like and (exec_path / "geckodriver.exe").is_file()
-        ):
-            # add deps location to path
-            if str(exec_path) not in os.environ["PATH"]:
-                os.environ["PATH"] += os.pathsep + str(exec_path)
-            return
-
-        # get the newest release of the geckodriver through the GitHub api.
-        r = requests.get(
-            "https://api.github.com/repos/mozilla/geckodriver/releases/latest"
-        )
-        data = r.json()
-
-        # download all assets of the latest release
-        if r.status_code == requests.codes.ok:
-            platform = platform_str()
-            bits = "64" if sys.maxsize > 2 ** 32 else "32"
-            matching_assets = [
-                asset
-                for asset in data["assets"]
-                if platform in asset["name"]
-                and bits in asset["name"]
-                and (asset["name"].endswith("gz") or asset["name"].endswith("zip"))
-            ]
-            if not matching_assets:
-                raise OSError("No matching asset found for system")
-            asset = matching_assets[0]
-            asset_path = exec_path / asset["name"]
-            with asset_path.open("wb") as f:
-                f.write(requests.get(asset["browser_download_url"]).content)
-            shutil.unpack_archive(asset_path, exec_path)
-            asset_path.unlink()
-
-            if is_unix_like:
-                # if on unix: make the binary file executable
-                subprocess.run(f'chmod +x {(exec_path / "geckodriver")}', shell=True)
-        else:
-            raise ConnectionRefusedError(
-                "Could not retrieve latest release from geckodriver github page. Install "
-                "manually instead. See https://github.com/mozilla/geckodriver"
-            )
-
-        # add deps location to path
-        if str(exec_path) not in os.environ["PATH"]:
-            os.environ["PATH"] += os.pathsep + str(exec_path)
+        metrics = [
+            ("activity[stats_visibility][calories]", calories),
+            ("activity[stats_visibility][heart_rate]", heart_rate),
+            ("activity[stats_visibility][pace]", speed),
+            ("activity[stats_visibility][power]", power),
+        ]
+        for metric_field_name, des_visibility in metrics:
+            form.find_control(name=metric_field_name, type="checkbox").get(
+                "only_me"
+            ).selected = not des_visibility
+        req = form.click(name="commit")
+        self.__browser.open(req)
 
 
 InteractiveWebClient.__init__.__doc__ = (
