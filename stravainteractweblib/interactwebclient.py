@@ -2,6 +2,7 @@ import json
 import time
 from base64 import b64decode
 
+import mechanize
 import stravaweblib
 from mechanize import Browser
 from stravaweblib.webclient import BASE_URL
@@ -30,6 +31,16 @@ class InteractiveWebClient(stravaweblib.WebClient):
             domain=".strava.com",
             value=self.jwt,
         )
+
+    def __browser_open_with_retries(self, url, num_retries = 3, *args, **kwargs):
+        retries_left = num_retries
+        while True:
+            try:
+                return self.__browser.open(url, *args, **kwargs)
+            except mechanize.HTTPError as e:
+                if retries_left:
+                    raise RuntimeError(f"Opening {url} failed {num_retries} times") from e
+                retries_left -= 1
 
     @staticmethod
     def _get_account_id(jwt) -> str:
@@ -60,14 +71,15 @@ class InteractiveWebClient(stravaweblib.WebClient):
         """
         Edits the given activity to change the visibility of stats and saves the edit.
         :param activity_id: ID of the activity to edit
-        :param calories: weather 'calories' stat should be public
-        :param heart_rate: weather 'hear rate' stat should be public
-        :param speed: weather 'speed' stat should be public
-        :param power: weather 'power' stat should be public
+        :param calories: whether 'calories' stat should be public
+        :param heart_rate: whether 'hear rate' stat should be public
+        :param speed: whether 'speed' stat should be public
+        :param power: whether 'power' stat should be public
         :return: None
         """
         url = f"{BASE_URL}/activities/{activity_id}/edit"
-        self.__browser.open(url)
+        self.__browser_open_with_retries(url)
+
         form = [f for f in self.__browser.forms() if f.attrs["id"] == "edit-activity"][
             0
         ]
@@ -82,7 +94,8 @@ class InteractiveWebClient(stravaweblib.WebClient):
                 "only_me"
             ).selected = not des_visibility
         req = form.click(name="commit")
-        self.__browser.open(req)
+        self.__browser_open_with_retries(req)
+
 
 
 InteractiveWebClient.__init__.__doc__ = (
