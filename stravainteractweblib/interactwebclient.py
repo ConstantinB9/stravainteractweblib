@@ -38,7 +38,7 @@ class InteractiveWebClient(stravaweblib.WebClient):
             try:
                 return self.__browser.open(url, *args, **kwargs)
             except mechanize.HTTPError as e:
-                if retries_left:
+                if not retries_left:
                     raise RuntimeError(f"Opening {url} failed {num_retries} times") from e
                 retries_left -= 1
 
